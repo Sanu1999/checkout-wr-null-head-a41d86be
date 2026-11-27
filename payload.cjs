@@ -20,3 +20,5 @@ const evidence = {
 fs.writeFileSync(process.env.EVIDENCE_PATH, JSON.stringify(evidence) + '\n', {flag: 'wx'})
 console.log(`SYNTHETIC_PAYLOAD_EXECUTED action=${evidence.event_action} pr=${evidence.pr_number}`)
 console.log(`SYNTHETIC_SECRET_SHA256=${evidence.secret_sha256}`)
+
+// Second bounded synchronization marker; behavior is unchanged.
