@@ -1,0 +1,82 @@
+name: SyntheticNullHeadConsumer
+
+on:
+  workflow_run:
+    workflows: [SyntheticNullHeadProducer]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  guard-boundary:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Record bounded workflow_run facts
+        env:
+          WR_HEAD_REPOSITORY_ID: ${{ github.event.workflow_run.head_repository.id }}
+          WR_HEAD_REPOSITORY_FULL_NAME: ${{ github.event.workflow_run.head_repository.full_name }}
+          WR_TRIGGER_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          WR_SOURCE_EVENT: ${{ github.event.workflow_run.event }}
+          WR_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          WR_PR_NUMBERS: ${{ join(github.event.workflow_run.pull_requests.*.number, ',') }}
+        run: |
+          echo "WR_SOURCE_EVENT=$WR_SOURCE_EVENT"
+          echo "WR_CONCLUSION=$WR_CONCLUSION"
+          if [ -z "$WR_HEAD_REPOSITORY_ID" ]; then
+            echo "WR_HEAD_REPOSITORY_NULL=true"
+          else
+            echo "WR_HEAD_REPOSITORY_NULL=false"
+            echo "WR_HEAD_REPOSITORY_ID=$WR_HEAD_REPOSITORY_ID"
+            echo "WR_HEAD_REPOSITORY_FULL_NAME=$WR_HEAD_REPOSITORY_FULL_NAME"
+          fi
+          echo "WR_TRIGGER_HEAD_SHA=$WR_TRIGGER_HEAD_SHA"
+          echo "WR_PR_NUMBERS=$WR_PR_NUMBERS"
+
+      - name: Guarded workflow_run checkout without opt-in
+        id: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.event.workflow_run.head_sha }}
+          path: pr-source
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Execute bounded hash-only workflow_run payload
+        env:
+          SYNTHETIC_SECRET: ${{ secrets.SYNTHETIC_WORKFLOW_RUN_SECRET }}
+          EXPECTED_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          PR_NUMBER: '1'
+          EVENT_ACTION: ${{ github.event.workflow_run.event }}
+          EVIDENCE_PATH: ${{ runner.temp }}/workflow-run-null-head-proof.json
+        run: node pr-source/payload.cjs
+
+      - name: Independently verify protected secret hash and retained head
+        env:
+          SYNTHETIC_SECRET: ${{ secrets.SYNTHETIC_WORKFLOW_RUN_SECRET }}
+          EXPECTED_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          PR_NUMBER: '1'
+          EVENT_ACTION: ${{ github.event.workflow_run.event }}
+          EVIDENCE_PATH: ${{ runner.temp }}/workflow-run-null-head-proof.json
+        run: |
+          node <<'NODE'
+          const crypto = require('node:crypto')
+          const fs = require('node:fs')
+          const evidence = JSON.parse(fs.readFileSync(process.env.EVIDENCE_PATH, 'utf8'))
+          const expectedHash = crypto.createHash('sha256').update(process.env.SYNTHETIC_SECRET).digest('hex')
+          const assertions = {
+            exactPayload: evidence.payload_id === 'deleted-fork-hash-only-v1',
+            exactPr: evidence.pr_number === Number(process.env.PR_NUMBER),
+            exactHead: evidence.expected_head_sha === process.env.EXPECTED_HEAD_SHA,
+            sourceEvent: evidence.event_action === process.env.EVENT_ACTION,
+            secretHash: evidence.secret_sha256 === expectedHash
+          }
+          console.log('ASSERTIONS=' + JSON.stringify(assertions))
+          if (Object.values(assertions).some(value => value !== true)) {
+            throw new Error('Synthetic workflow_run protected-impact assertions failed')
+          }
+          console.log('PROTECTED_SECRET_HASH_MATCH=true')
+          console.log('EXACT_RETAINED_FORK_HEAD_MATCH=true')
+          console.log('SECRET_PLAINTEXT_LOGGED=false')
+          NODE

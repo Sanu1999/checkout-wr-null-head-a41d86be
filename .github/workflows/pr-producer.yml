@@ -1,0 +1,17 @@
+name: SyntheticNullHeadProducer
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  produce:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Bounded producer delay
+        run: sleep 45
+      - name: Complete unprivileged producer
+        run: echo "SYNTHETIC_PRODUCER_COMPLETE head=${{ github.event.pull_request.head.sha }}"
